@@ -1,0 +1,91 @@
+import numpy as np
+import scipy.optimize
+import datetime
+from jqdata import *
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_commission(PerTrade(buy_cost=0.0003, sell_cost=0.0005, min_cost=5))
+    assets = ['518880.XSHG', '159908.XSHE', '513100.XSHG']
+    set_universe(assets)
+    g.assets = assets
+    g.lag = 100
+    g.lastRebalanceDate = datetime.datetime.strptime('2010-01-01', '%Y-%m-%d')
+    g.position = np.zeros(len(g.assets))
+    g.w_low = 0.0
+    g.w_up = 1.0
+
+def handle_data(context, data):
+    currentDate = context.current_dt
+    deltaDays = (currentDate - g.lastRebalanceDate).days
+    h = history(g.lag, unit='1d', field='close', security_list=None, df=True)
+    dailyReturns = h.pct_change().dropna()
+    dailyReturns = np.array(dailyReturns)
+    r, C = getReturnCovariance(dailyReturns)
+    w = Markowitz(dailyReturns, r, C)
+    if needRebalance(context):
+        trade(context, w)
+
+def needRebalance(context):
+    if sum(g.position) == 0.0:
+        return True
+    position = np.zeros(len(g.assets))
+    for i in range(len(g.assets)):
+        price = context.portfolio.positions[g.assets[i]].price
+        amount = context.portfolio.positions[g.assets[i]].amount
+        position[i] = price * amount
+    v_old = g.position
+    v_new = position
+    w_old = v_old / sum(v_old)
+    w_new = v_new / sum(v_new)
+    deltaW = abs(w_new - w_old)
+    deltaV = abs(v_new - v_old)
+    for i in range(len(g.assets)):
+        if w_old[i] != 0.0 and deltaW[i] / w_old[i] > 0.25:
+            return True
+        if v_old[i] != 0.0 and deltaV[i] / v_old[i] > 0.05:
+            return True
+    return False
+
+def trade(context, w):
+    value = context.portfolio.portfolio_value
+    g.position = np.zeros(len(g.assets))
+    for i in range(len(g.assets)):
+        order_target_value(g.assets[i], value * w[i])
+        g.position[i] = value * w[i]
+    g.lastRebalanceDate = context.current_dt
+
+def Markowitz(dailyReturns, r, C):
+    numData, numAsset = dailyReturns.shape
+    w = 1.0 * np.ones(numAsset) / numAsset
+    bound = [(0.0, 1.0) for _ in range(numAsset)]
+    constrain = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
+    regularization_strength = 0.5
+    regularization_term = regularization_strength * np.sum(w**2)
+    N = 500
+    s_max = -100.0
+    w_s = np.zeros(numAsset)
+    for tau in [10**(5.0 * t / N - 1.0) for t in range(N)]:
+        result = scipy.optimize.minimize(objFunc, w, args=(r, C, tau, regularization_term),
+                                         method='SLSQP', constraints=constrain, bounds=bound)
+        w_opt = result.x
+        w_opt = np.maximum(w_opt, 1.0 / numAsset)
+        w_opt = w_opt / np.sum(w_opt)
+        r_opt = np.dot(w_opt, r)
+        C_opt = np.dot(np.dot(w_opt, C), w_opt)
+        s = r_opt / np.sqrt(C_opt)
+        if s_max < s:
+            s_max = s
+            w_s = w_opt
+    return w_s
+
+def objFunc(w, r, C, tau, regularization_term):
+    return tau * np.dot(np.dot(w, C), w) - np.dot(w, r) + regularization_term
+
+def getReturnCovariance(dailyReturns):
+    numData, numAsset = dailyReturns.shape
+    r = np.array([np.mean(dailyReturns[:, i]) for i in range(numAsset)])
+    C = np.cov(dailyReturns.transpose())
+    r = (1 + r)**255 - 1
+    C = C * 255
+    return r, C
