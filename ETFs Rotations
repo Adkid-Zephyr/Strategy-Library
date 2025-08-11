@@ -1,0 +1,147 @@
+import numpy as np
+import pandas as pd
+import math
+import datetime
+import requests
+import json
+
+def initialize(context):
+    g.etf_pool = [
+        '159915.XSHE',  
+        '510180.XSHG',  
+        '518880.XSHG',  
+        '513100.XSHG',  
+        '159509.XSHE',  
+        '512100.XSHG',  
+        '513500.XSHG',  
+        '512480.XSHG'   
+    ]
+    g.m_days = 25      
+    g.max_drawdown = 0.05      
+    g.suspension_days = 10     
+    g.suspended_etfs = {}      
+    g.buy_price_dict = {}
+    set_benchmark('000300.XSHG')
+    set_slip_fee(context)
+    run_daily(trade, time='9:31', reference_security='000300.XSHG')
+    run_daily(check_risk, time='11:25', reference_security='000300.XSHG')
+    run_daily(check_risk, time='14:45', reference_security='000300.XSHG')
+    g.dingding_url = ""
+    g.etf_names = {
+        '159915.XSHE': '创业板ETF',
+        '510180.XSHG': '上证180ETF',
+        '518880.XSHG': '黄金ETF',
+        '513100.XSHG': '纳指ETF',
+        '159509.XSHE': '纳指科技ETF',
+        '512100.XSHG': '中证1000ETF',
+        '513500.XSHG': '标普500ETF',
+        '512480.XSHG': '科创100ETF'
+    }
+
+def set_slip_fee(context):
+    set_slippage(PriceRelatedSlippage(0.002))
+    set_order_cost(OrderCost(
+        open_tax=0,           
+        close_tax=0.001,      
+        open_commission=0.0003,
+        close_commission=0.0003,
+        min_commission=5),     
+        type='stock')
+
+def check_abnormal_volatility(etf):
+    df = attribute_history(etf, 1, '1d', ['high', 'close'])
+    today_high = df['high'].iloc[-1]
+    today_close = df['close'].iloc[-1]
+    today_drawdown = (today_high - today_close) / today_high
+    return today_drawdown > g.max_drawdown
+
+def check_risk(context):
+    current_time = context.current_dt.strftime('%H:%M')
+    time_mark = "上午" if current_time == "11:25" else "下午"
+    hold_list = list(context.portfolio.positions)
+    current_date = context.current_dt.date()
+    risk_msg = f"🔍 {time_mark}风控检查报告\n"
+    risk_msg += f"⏰ 检查时间：{context.current_dt.strftime('%Y-%m-%d %H:%M')}\n"
+    risk_msg += f"💰 当前净值：{context.portfolio.total_value:.2f}\n"
+    risk_msg += f"💵 可用资金：{context.portfolio.available_cash:.2f}\n"
+    risk_msg += "-" * 30 + "\n"
+    if not hold_list:
+        risk_msg += "📢 当前无持仓，跳过风控检查\n"
+        send_dingding(risk_msg)
+        return
+    risk_msg += "🔎 持仓检查结果：\n"
+    for etf in hold_list:
+        df = attribute_history(etf, 1, '1d', ['high', 'low', 'open', 'close', 'volume'])
+        today_high = df['high'].iloc[-1]
+        today_low = df['low'].iloc[-1]
+        today_open = df['open'].iloc[-1]
+        today_close = df['close'].iloc[-1]
+        today_drawdown = (today_high - today_close) / today_high
+        position = context.portfolio.positions[etf]
+        risk_msg += f"\n📊 {g.etf_names[etf]}({etf}):\n"
+        risk_msg += f"  • 持仓数量：{position.total_amount}股\n"
+        risk_msg += f"  • 持仓成本：{position.avg_cost:.3f}\n"
+        risk_msg += f"  • 当前价格：{today_close:.3f}\n"
+        risk_msg += f"  • 今日振幅：{((today_high/today_low - 1) * 100):.2f}%\n"
+        risk_msg += f"  • 今日涨跌：{((today_close/today_open - 1) * 100):.2f}%\n"
+        risk_msg += f"  • 当日回撤：{today_drawdown:.2%}\n"
+        risk_msg += f"  • 持仓收益：{((today_close/position.avg_cost - 1) * 100):.2f}%\n"
+        if check_abnormal_volatility(etf):
+            risk_msg += f"⚠️ 触发风控：\n"
+            risk_msg += f"  • 回撤超过阈值 {g.max_drawdown:.2%}\n"
+            risk_msg += f"  • 执行卖出并暂停{g.suspension_days}天\n"
+            order_target_value(etf, 0)
+            g.suspended_etfs[etf] = current_date + datetime.timedelta(days=g.suspension_days)
+        else:
+            risk_msg += "✅ 通过风控检查\n"
+        risk_msg += "-" * 20 + "\n"
+    send_dingding(risk_msg)
+
+def trade(context):
+    log.info(f"\n=== {context.current_dt.date()} 交易信号检查 ===")
+    current_date = context.current_dt.date()
+    before_update = set(g.suspended_etfs.keys())
+    g.suspended_etfs = {etf: date for etf, date in g.suspended_etfs.items() if date > current_date}
+    removed = before_update - set(g.suspended_etfs.keys())
+    if removed:
+        log.info(f"解除暂停: {removed}")
+    if g.suspended_etfs:
+        log.info(f"当前暂停列表: {g.suspended_etfs}")
+    target_num = 1    
+    target_list = get_rank(g.etf_pool, context)[:target_num]
+    log.info(f"目标ETF: {target_list}")
+    hold_list = list(context.portfolio.positions)
+    log.info(f"当前持仓: {hold_list}")
+    for etf in hold_list:
+        if etf not in target_list:
+            order_target_value(etf, 0)
+            log.info(f"卖出决策: {etf} 不在目标清单中")
+    hold_list = list(context.portfolio.positions)
+    if len(hold_list) < target_num:
+        value = context.portfolio.available_cash / (target_num - len(hold_list))
+        log.info(f"可用现金: {context.portfolio.available_cash:.2f}, 目标买入金额: {value:.2f}")
+        for etf in target_list:
+            if etf in g.suspended_etfs:
+                log.info(f"买入决策: {etf} 在暂停期至{g.suspended_etfs[etf]}，跳过")
+                continue
+            if context.portfolio.positions[etf].total_amount == 0:
+                order_target_value(etf, value)
+                log.info(f"买入决策: 执行买入 {etf}, 金额{value:.2f}")
+    log_portfolio(context)
+    log.info("=== 交易检查结束 ===\n")
+    trade_msg = "💹 交易信号报告\n"
+    trade_msg += f"⏰ 交易时间：{context.current_dt.strftime('%Y-%m-%d %H:%M')}\n"
+    trade_msg += f"💰 账户总值：{context.portfolio.total_value:.2f}\n"
+    trade_msg += f"💵 可用资金：{context.portfolio.available_cash:.2f}\n"
+    trade_msg += "-" * 30 + "\n"
+    if removed:
+        trade_msg += "🔓 解除暂停交易：\n"
+        for etf in removed:
+            trade_msg += f"  • {g.etf_names[etf]}({etf})\n"
+        trade_msg += "-" * 20 + "\n"
+    sell_list = [etf for etf in hold_list if etf not in target_list]
+    if sell_list:
+        trade_msg += "📉 卖出决策：\n"
+        for etf in sell_list:
+            position = context.portfolio.positions[etf]
+            returns = (position.price/position.avg_cost - 1) * 100
