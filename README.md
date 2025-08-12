@@ -29,4 +29,35 @@ The risk control mechanism includes:
 - **Daily Drawdown Check**: The strategy checks the drawdown of the held ETFs daily, and if the drawdown exceeds the threshold, a sell order is executed.
 
 To better monitor and manage the investment process, the strategy records daily trading signals, position status, risk check results, and other information, and sends these details to a designated group via a DingTalk robot, enabling investors to stay informed about their investment status and make timely decisions.
-```
+
+
+# Multi-factor
+
+#### Initialization
+- **Basic Setup**: Define the benchmark as CSI 300 Index (`000300.XSHG`), enable real price trading, and set order costs.
+- **Strategy Parameters**: Set the number of stocks to hold (`g.stock_num = 30`), rebalancing cycle (`g.rebalance_days = 10`), and initialize the last rebalance date.
+- **Scheduled Tasks**: Schedule daily tasks for market open trading logic (`market_open`) and limit-up check (`check_limit_up`).
+
+#### Market Open Logic
+- **Rebalancing Check**: Determine if the rebalancing cycle has passed since the last rebalance.
+- **Stock Selection**: Call `get_stock_list` to obtain a list of target stocks based on predefined criteria.
+- **Portfolio Adjustment**: Call `rebalance_portfolio` to adjust the portfolio by selling non-target stocks and buying new ones.
+- **Update Last Rebalance Date**: Update the last rebalance date to the current date.
+
+#### Stock Selection
+- **Initial Filtering**: Retrieve all stock securities and filter out new stocks, KCB stocks, and ST stocks.
+- **Financial Criteria**: Apply financial filters (e.g., ROE > 5%, increasing revenue and net profit) and order by circulating market cap.
+- **Final Selection**: Select the top `g.stock_num` stocks by market cap to form the target list.
+
+#### Portfolio Rebalancing
+- **Sell Non-Target Stocks**: Liquidate positions that are not in the target list.
+- **Calculate Target Positions**: Determine the target value for each stock based on the total portfolio value and number of stocks.
+- **Buy New Stocks**: Allocate funds to new stocks up to the target number, ensuring the portfolio is balanced.
+
+#### Limit-Up Monitoring
+- **Identify Limit-Up Stocks**: Check for stocks that hit the upper limit the previous day and store them in `g.high_limit_list`.
+- **Avoid Buying Limit-Up Stocks**: Prevent buying stocks that are likely to be less liquid or have limited trading opportunities.
+
+#### Helper Functions
+- **Filter New Stocks**: Exclude recently listed stocks to avoid high volatility and uncertainty.
+- **Filter KCB and ST Stocks**: Remove stocks from the KCB board and those marked as ST to focus on more stable investments.
