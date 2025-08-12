@@ -1,0 +1,75 @@
+from jqdata import *
+
+def initialize(context):
+    set_benchmark('000300.XSHG')
+    set_option('use_real_price', True)
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.001, open_commission=0.0003, close_commission=0.0003, min_commission=5), type='stock')
+    g.stock_num = 30
+    g.rebalance_days = 10
+    g.last_rebalance_date = None
+    run_daily(check_limit_up, time='14:00')
+    run_daily(market_open, time='9:30')
+
+def market_open(context):
+    current_date = context.current_dt.date()
+    if g.last_rebalance_date:
+        days_since_last = len(get_trade_days(start_date=g.last_rebalance_date, end_date=current_date)) - 1
+    else:
+        days_since_last = g.rebalance_days
+    if days_since_last >= g.rebalance_days:
+        try:
+            stock_list = get_stock_list(context)
+            rebalance_portfolio(context, stock_list)
+            g.last_rebalance_date = current_date
+        except Exception as e:
+            log.error(f"调仓失败: {str(e)}")
+            send_message(f"策略异常: {str(e)}")
+
+def get_stock_list(context):
+    all_stocks = get_all_securities(types=['stock'], date=context.previous_date).index.tolist()
+    filtered = filter_new_stock(context, all_stocks)
+    filtered = filter_kcb_stock(context, filtered)
+    filtered = filter_st_stock(filtered)
+    q = query(
+        valuation.code,
+        valuation.circulating_market_cap,
+        indicator.roe,
+        indicator.inc_total_revenue_year_on_year,
+        indicator.inc_net_profit_year_on_year
+    ).filter(
+        valuation.code.in_(filtered),
+        indicator.roe > 5,
+        indicator.inc_total_revenue_year_on_year > 0,
+        indicator.inc_net_profit_year_on_year > 0
+    ).order_by(
+        valuation.circulating_market_cap.asc()
+    ).limit(g.stock_num * 3)
+    df = get_fundamentals(q)
+    return df.sort_values('circulating_market_cap').head(g.stock_num)['code'].tolist()
+
+def rebalance_portfolio(context, target_list):
+    for stock in context.portfolio.positions:
+        if stock not in target_list and stock not in g.high_limit_list:
+            order_target(stock, 0)
+    position_value = context.portfolio.total_value / g.stock_num
+    for stock in target_list:
+        if len(context.portfolio.positions) >= g.stock_num:
+            break
+        if stock not in context.portfolio.positions:
+            order_target_value(stock, position_value)
+
+def check_limit_up(context):
+    g.high_limit_list = []
+    hold_list = list(context.portfolio.positions)
+    if hold_list:
+        df = get_price(hold_list, end_date=context.previous_date, fields=['close', 'high_limit', 'paused'], count=1, panel=False)
+        g.high_limit_list = df.query('close==high_limit and paused==0')['code'].tolist()
+
+def filter_new_stock(context, stock_list, days=180):
+    return [s for s in stock_list if (context.current_dt.date() - get_security_info(s).start_date).days > days]
+
+def filter_kcb_stock(context, stock_list):
+    return [s for s in stock_list if s[:3] not in ['688', '899']]
+
+def filter_st_stock(stock_list):
+    return [s for s in stock_list if not get_security_info(s).display_name.startswith('ST')]
