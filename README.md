@@ -61,3 +61,30 @@ To better monitor and manage the investment process, the strategy records daily 
 #### Helper Functions
 - **Filter New Stocks**: Exclude recently listed stocks to avoid high volatility and uncertainty.
 - **Filter KCB and ST Stocks**: Remove stocks from the KCB board and those marked as ST to focus on more stable investments.
+
+
+# Low PE High DY 
+
+- **Stock Selection**
+  - Exclude stocks from the Science and Technology Innovation Board (STAR Market) and the Beijing Stock Exchange, as well as ST stocks and newly listed stocks (less than 300 trading days).
+  - Select the top 10% of stocks with the highest average dividend yield over the past three years.
+  - Filter stocks based on:
+    - PE ratio between 0 and 20.
+    - ROE greater than 3%.
+    - Year-over-year increase in total revenue greater than 5%.
+    - Year-over-year increase in net profit greater than 11%.
+    - PEG ratio between 0.08 and 2.
+  - Exclude suspended and limit-up stocks from the previous day, and select the top 10 stocks as the buy pool.
+
+- **Trading Execution**
+  - Rebalance the portfolio once a month on the first trading day at the market open.
+  - Sell stocks not in the final selection and those that were limit-up the previous day but not on the current day.
+  - Buy the top 10 selected stocks, distributing available cash evenly.
+
+- **Risk Management**
+  - Daily check and sell stocks that were limit-up the previous day but not on the current day.
+  - Strictly limit the number of holdings to 10 stocks.
+
+- **Strategy Characteristics**
+  - Focuses on stability and steady growth, suitable for conservative investors.
+  - Emphasizes dividend income, low PE ratios, and growth potential.
